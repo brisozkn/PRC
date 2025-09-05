@@ -1,0 +1,48 @@
+
+from GNM_Cross_Correlation import GNM_cc
+import biotite.sequence.io.fasta as fasta
+import numpy as np
+import os
+
+def MSA_man(cc_list, MSA_file, protein_id, output_dir=f"{protein_id}_MSAs"):
+    os.makedirs(output_dir, exist_ok=True)
+
+    sequence_list, pid_list = [], []
+    with open(MSA_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                pid_list.append(line)
+            else:
+                sequence_list.append(line)
+
+    max_len = max(len(seq) for seq in sequence_list)
+    seq_array = np.array([list(seq.ljust(max_len, '-')) for seq in sequence_list])
+
+    m = 0
+    for cc in cc_list:
+        m += 1
+
+        neg_indices = [i for i, val in enumerate(cc[:,0]) if val < 0]
+        pos_indices = [i for i, val in enumerate(cc[:,0]) if val > 0]
+
+        masked_seq_array_p, masked_seq_array_n = seq_array.copy(), seq_array.copy()
+        masked_seq_array_p[:, pos_indices] = 'X'
+        masked_seq_array_n[:, neg_indices] = 'X'
+
+        p_list = masked_seq_array_p.tolist()
+        n_list = masked_seq_array_n.tolist()
+
+        
+        p_file = os.path.join(output_dir, f"{protein_id}_p{m}.a3m")
+        with open(p_file, "w") as f:
+            for pid, seq in zip(pid_list, p_list):
+                f.write(pid + "\n")
+                f.write("".join(seq) + "\n")
+
+        
+        n_file = os.path.join(output_dir, f"{protein_id}_n{m}.a3m")
+        with open(n_file, "w") as f:
+            for pid, seq in zip(pid_list, n_list):
+                f.write(pid + "\n")
+                f.write("".join(seq) + "\n")
