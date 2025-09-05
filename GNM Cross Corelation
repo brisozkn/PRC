@@ -1,0 +1,125 @@
+import numpy as np
+import biotite.structure.io.pdbx as pdbx
+import biotite.structure.info as blook
+import biotite.database.rcsb as rcsb
+import biotite.structure as struc
+import matplotlib.pyplot as plt
+
+
+def GNM_cc(pdb_id, chain_id="A", mode_max=20, rcut_gnm=10.0):
+    """
+    Gaussian Network Model (GNM) slow and fast modes calculation with Biotite.
+
+    Parameters
+    ----------
+    pdb_file : str
+        Path to PDB file
+    chain_id : str
+        Chain ID (default = "A")
+    mode_max : int
+        Number of slow/fast modes to return
+    rcut_gnm : float
+        Cutoff distance in Å
+
+    Returns
+    -------
+    slow_modes_gnm : ndarray
+        Slow modes (residues x mode_max)
+    w : ndarray
+        Eigenvalues
+    slow_vectors_gnm : ndarray
+        Slow eigenvectors
+    res_info : list of (resname, res_id)
+        Residue names and IDs
+    fast_modes_gnm : ndarray
+        Fast modes
+    fast_vectors_gnm : ndarray
+        Fast eigenvectors
+    """
+    
+    # --- Download and Read PDBx ---
+    pdbx_file = pdbx.CIFFile.read(rcsb.fetch(pdb_id,'cif'))
+
+    # --- Structure ---
+    protein_structure = pdbx.get_structure(pdbx_file, model = 1, use_author_fields=False)
+
+    # Chain Select
+    chain_atoms = protein_structure[protein_structure.chain_id == chain_id]
+    
+    # CA Select
+    ca_atoms = chain_atoms[chain_atoms.atom_name == "CA"]
+
+    # Coordinates
+    ca_coords = ca_atoms.coord
+    res_names = ca_atoms.res_name
+    res_ids = ca_atoms.res_id
+
+    res_names = np.array(ca_atoms.res_name)  # string array
+    one_letter_func = np.vectorize(blook.one_letter_code)
+    res_names = one_letter_func(res_names)
+    res_ids = np.array(ca_atoms.res_id)      # int veya string array
+    res = np.column_stack((res_names, res_ids))
+
+
+    resnum = ca_coords.shape[0]
+
+    coords_array = np.array(ca_coords)
+
+    Ca_x,Ca_y,Ca_z = coords_array[:,0],coords_array[:,1],coords_array[:,2]
+    
+    distMat = np.sqrt((Ca_x[:,np.newaxis]-Ca_x[np.newaxis,:])**2 +
+                  (Ca_y[:,np.newaxis]-Ca_y[np.newaxis,:])**2 +
+                  (Ca_z[:,np.newaxis]-Ca_z[np.newaxis,:])**2)
+
+    cont = -1 * ((distMat <= rcut_gnm) & (distMat > 1e-4)).astype(np.float32)
+    np.fill_diagonal(cont, 0)
+
+    np.fill_diagonal(cont, -np.sum(cont, axis=1))
+    U, w, Vh = np.linalg.svd(cont)
+    S = np.diag(w)
+    V = Vh.T
+
+    slow_vectors = np.zeros((resnum, mode_max), dtype=float)
+    slow_mods = np.zeros((resnum, mode_max), dtype=float)
+    for i in range(mode_max):
+        slow_vectors[:,i] = V[:,-i-2]
+        slow_mods[:,i] = V[:,-i-2]**2 / w[-i-2]
+
+    #Cross Corelation
+    modes = mode_max 
+
+    invcont_list = []
+    for kk in range(1, modes+1):
+        k0 = resnum - kk - 1
+        invcont = np.zeros((resnum, resnum))
+        for i in range(resnum):
+            for j in range(resnum):
+                invcont[i,j] = U[i,k0] * V[j,k0] / w[k0]
+        invcont_list.append(invcont)
+
+    cross_cor_list = []
+    for inv in invcont_list:
+        cross_cor = np.zeros((resnum, resnum))
+        for i in range(resnum):
+                for j in range(resnum):
+                     cross_cor[i,j] = inv[i,j] / (inv[i,i]*inv[j,j])**0.5
+        cross_cor_list.append(cross_cor)
+
+    for idx, cross_cor in enumerate(cross_cor_list):
+        plt.figure(figsize=(6,5))
+        plt.imshow(cross_cor, vmin=-0.01, vmax=0.01, cmap='viridis', origin='lower')
+        plt.colorbar()
+        plt.title(f"Mode {idx+1}")  # MATLAB'daki 1 tabanlı index
+        plt.xlabel("Residue Index")
+        plt.ylabel("Residue Index")
+        plt.tight_layout()
+        plt.show()
+
+    plt.plot(slow_mods[:, 0])
+    plt.xlabel("Residue Index")
+    plt.ylabel("Mode Amplitude")
+    plt.title("GNM Slowest Mode")
+    plt.show()
+    
+    return slow_mods, w, slow_vectors, res, cross_cor_list
+
